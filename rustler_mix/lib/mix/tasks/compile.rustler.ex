@@ -14,11 +14,13 @@ defmodule Mix.Tasks.Compile.Rustler do
     Enum.map(crates, &compile_crate/1)
 
     # Workaround for a mix problem. We should REALLY get this fixed properly.
-    _ = symlink_or_copy(config,
-      Path.expand("priv"),
-      Path.join(Mix.Project.app_path(config), "priv"))
+    _ =
+      symlink_or_copy(
+        config,
+        Path.expand("priv"),
+        Path.join(Mix.Project.app_path(config), "priv")
+      )
   end
-
 
   defp priv_dir, do: "priv/native"
 
@@ -26,7 +28,7 @@ defmodule Mix.Tasks.Compile.Rustler do
     crate_path = Keyword.get(config, :path)
     build_mode = Keyword.get(config, :mode, :release)
 
-    Mix.shell.info "Compiling NIF crate #{inspect id} (#{crate_path})..."
+    Mix.shell().info("Compiling NIF crate #{inspect(id)} (#{crate_path})...")
 
     compile_command =
       make_base_command(Keyword.get(config, :cargo, :system))
@@ -35,9 +37,8 @@ defmodule Mix.Tasks.Compile.Rustler do
       |> make_build_mode_flag(build_mode)
       |> make_platform_hacks(:os.type())
 
-    crate_full_path = Path.expand(crate_path, File.cwd!)
-    target_dir = Path.join([Mix.Project.build_path(), "rustler_crates",
-                            Atom.to_string(id)])
+    crate_full_path = Path.expand(crate_path, File.cwd!())
+    target_dir = Path.join([Mix.Project.build_path(), "rustler_crates", Atom.to_string(id)])
 
     cargo_data = check_crate_env(crate_full_path)
     lib_name = Rustler.TomlParser.get_table_val(cargo_data, ["lib"], "name")
@@ -48,12 +49,15 @@ defmodule Mix.Tasks.Compile.Rustler do
 
     [cmd_bin | args] = compile_command
 
-    compile_return = System.cmd(cmd_bin, args, [
-      cd: crate_full_path,
-      stderr_to_stdout: true,
-      env: [{"CARGO_TARGET_DIR", target_dir} | Keyword.get(config, :env, [])],
-      into: IO.stream(:stdio, :line),
-    ])
+    compile_return =
+      System.cmd(
+        cmd_bin,
+        args,
+        cd: crate_full_path,
+        stderr_to_stdout: true,
+        env: [{"CARGO_TARGET_DIR", target_dir} | Keyword.get(config, :env, [])],
+        into: IO.stream(:stdio, :line)
+      )
 
     case compile_return do
       {_, 0} -> nil
@@ -74,8 +78,9 @@ defmodule Mix.Tasks.Compile.Rustler do
 
   defp make_base_command(:system), do: ["cargo", "rustc"]
   defp make_base_command({:bin, path}), do: [path, "rustc"]
+
   defp make_base_command({:rustup, version}) do
-    if Rustup.version == :none do
+    if Rustup.version() == :none do
       throw_error(:rustup_not_installed)
     end
 
@@ -90,6 +95,7 @@ defmodule Mix.Tasks.Compile.Rustler do
     # Fix for https://github.com/hansihe/Rustler/issues/12
     args ++ ["--", "--codegen", "link-args=-flat_namespace -undefined suppress"]
   end
+
   defp make_platform_hacks(args, _), do: args
 
   defp make_no_default_features_flag(args, true), do: args ++ []
@@ -102,7 +108,7 @@ defmodule Mix.Tasks.Compile.Rustler do
   defp make_build_mode_flag(args, :debug), do: args ++ []
 
   def make_lib_name(base_name) do
-    case :os.type do
+    case :os.type() do
       {:win32, _} -> {"#{base_name}.dll", "lib#{base_name}.dll"}
       {:unix, :darwin} -> {"lib#{base_name}.dylib", "lib#{base_name}.so"}
       {:unix, _} -> {"lib#{base_name}.so", "lib#{base_name}.so"}
@@ -110,7 +116,7 @@ defmodule Mix.Tasks.Compile.Rustler do
   end
 
   def throw_error(error_descr) do
-    Mix.shell.error Messages.message(error_descr)
+    Mix.shell().error(Messages.message(error_descr))
     raise "Compilation error"
   end
 
@@ -123,6 +129,7 @@ defmodule Mix.Tasks.Compile.Rustler do
       case File.read("#{crate}/Cargo.toml") do
         {:error, :enoent} ->
           throw_error({:cargo_toml_not_found, crate})
+
         {:ok, text} ->
           Rustler.TomlParser.parse(text)
       end
@@ -131,9 +138,9 @@ defmodule Mix.Tasks.Compile.Rustler do
   end
 
   defp raise_missing_crates do
-    Mix.raise """
+    Mix.raise("""
     Missing required :rustler_crates option in mix.exs.
-    """
+    """)
   end
 
   # https://github.com/elixir-lang/elixir/blob/b13404e913fff70e080c08c2da3dbd5c41793b54/lib/mix/lib/mix/project.ex#L553-L562
@@ -143,6 +150,7 @@ defmodule Mix.Tasks.Compile.Rustler do
         File.rm_rf!(target)
         File.cp_r!(source, target)
       end
+
       :ok
     else
       Mix.Utils.symlink_or_copy(source, target)
