@@ -1,4 +1,4 @@
-use crate::types::pid::Pid;
+use crate::types::LocalPid;
 use crate::wrapper::{NIF_ENV, NIF_TERM};
 use crate::{Encoder, Term};
 use std::marker::PhantomData;
@@ -23,7 +23,7 @@ pub struct Env<'a> {
 
 /// Two environments are equal if they're the same `NIF_ENV` value.
 ///
-/// A `Env<'a>` is equal to a `Env<'b>` iff `'a` and `'b` are the same lifetime.
+/// A `Env<'a>` is equal to a `Env<'b>` if and only if `'a` and `'b` are the same lifetime.
 impl<'a, 'b> PartialEq<Env<'b>> for Env<'a> {
     fn eq(&self, other: &Env<'b>) -> bool {
         self.env == other.env
@@ -76,7 +76,7 @@ impl<'a> Env<'a> {
     /// Panics if the above rules are broken (by trying to send a message from
     /// an `OwnedEnv` on a thread that's managed by the Erlang VM).
     ///
-    pub fn send(self, pid: &Pid, message: Term<'a>) {
+    pub fn send(self, pid: &LocalPid, message: Term<'a>) {
         let thread_type = unsafe { rustler_sys::enif_thread_type() };
         let env = if thread_type == rustler_sys::ERL_NIF_THR_UNDEFINED {
             ptr::null_mut()
@@ -124,10 +124,10 @@ impl<'a> Env<'a> {
 /// Erlang process.
 ///
 ///     use rustler::env::OwnedEnv;
-///     use rustler::types::pid::Pid;
+///     use rustler::types::LocalPid;
 ///     use rustler::Encoder;
 ///
-///     fn send_string_to_pid(data: &str, pid: &Pid) {
+///     fn send_string_to_pid(data: &str, pid: &LocalPid) {
 ///         let mut msg_env = OwnedEnv::new();
 ///         msg_env.send_and_clear(pid, |env| data.encode(env));
 ///     }
@@ -168,7 +168,7 @@ impl OwnedEnv {
     /// can only use this method on a thread that was created by other
     /// means. (This curious restriction is imposed by the Erlang VM.)
     ///
-    pub fn send_and_clear<F>(&mut self, recipient: &Pid, closure: F)
+    pub fn send_and_clear<F>(&mut self, recipient: &LocalPid, closure: F)
     where
         F: for<'a> FnOnce(Env<'a>) -> Term<'a>,
     {
@@ -178,11 +178,11 @@ impl OwnedEnv {
 
         let message = self.run(|env| closure(env).as_c_arg());
 
-        let c_env = *self.env;
-        self.env = Arc::new(c_env); // invalidate SavedTerms
         unsafe {
-            rustler_sys::enif_send(ptr::null_mut(), recipient.as_c_arg(), c_env, message);
+            rustler_sys::enif_send(ptr::null_mut(), recipient.as_c_arg(), *self.env, message);
         }
+
+        self.clear();
     }
 
     /// Free all terms in this environment and clear it for reuse.

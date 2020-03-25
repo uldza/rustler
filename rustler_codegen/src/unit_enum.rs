@@ -1,24 +1,17 @@
 use proc_macro2::{Span, TokenStream};
 
 use heck::SnakeCase;
-use syn::{self, Data, Fields, Ident, Variant};
+use syn::{self, Fields, Ident, Variant};
 
-use super::Context;
+use super::context::Context;
 
 pub fn transcoder_decorator(ast: &syn::DeriveInput) -> TokenStream {
     let ctx = Context::from_ast(ast);
 
-    let variants = match ast.data {
-        Data::Enum(ref data_enum) => &data_enum.variants,
-        Data::Struct(_) => panic!("NifUnitEnum can only be used with enums"),
-        Data::Union(_) => panic!("NifUnitEnum can only be used with enums"),
-    };
-
-    let num_lifetimes = ast.generics.lifetimes().count();
-    if num_lifetimes > 1 {
-        panic!("Enum can only have one lifetime argument");
-    }
-    let has_lifetime = num_lifetimes == 1;
+    let variants = ctx
+        .variants
+        .as_ref()
+        .expect("NifUnitEnum can only be used with enums");
 
     for variant in variants {
         if let Fields::Unit = variant.fields {
@@ -33,32 +26,36 @@ pub fn transcoder_decorator(ast: &syn::DeriveInput) -> TokenStream {
             let atom_str = variant.ident.to_string().to_snake_case();
             let atom_fn = Ident::new(&format!("atom_{}", atom_str), Span::call_site());
             quote! {
-                atom #atom_fn = #atom_str;
+                #atom_fn = #atom_str,
             }
         })
         .collect();
 
     let atom_defs = quote! {
-        ::rustler::rustler_atoms! {
+        rustler::atoms! {
             #(#atoms)*
         }
     };
 
-    let variants: Vec<&Variant> = variants.iter().collect();
+    let atoms_module_name = ctx.atoms_module_name(Span::call_site());
 
     let decoder = if ctx.decode() {
-        gen_decoder(&ast.ident, &variants, &atom_defs, has_lifetime)
+        gen_decoder(&ctx, &variants, &atoms_module_name)
     } else {
         quote! {}
     };
 
     let encoder = if ctx.encode() {
-        gen_encoder(&ast.ident, &variants, &atom_defs, has_lifetime)
+        gen_encoder(&ctx, &variants, &atoms_module_name)
     } else {
         quote! {}
     };
 
     let gen = quote! {
+        mod #atoms_module_name {
+            #atom_defs
+        }
+
         #decoder
         #encoder
     };
@@ -66,17 +63,9 @@ pub fn transcoder_decorator(ast: &syn::DeriveInput) -> TokenStream {
     gen
 }
 
-pub fn gen_decoder(
-    enum_name: &Ident,
-    variants: &[&Variant],
-    atom_defs: &TokenStream,
-    has_lifetime: bool,
-) -> TokenStream {
-    let enum_type = if has_lifetime {
-        quote! { #enum_name <'b> }
-    } else {
-        quote! { #enum_name }
-    };
+fn gen_decoder(ctx: &Context, variants: &[&Variant], atoms_module_name: &Ident) -> TokenStream {
+    let enum_type = &ctx.ident_with_lifetime;
+    let enum_name = ctx.ident;
 
     let variant_defs: Vec<TokenStream> = variants
         .iter()
@@ -96,7 +85,7 @@ pub fn gen_decoder(
     let gen = quote! {
         impl<'a> ::rustler::Decoder<'a> for #enum_type {
             fn decode(term: ::rustler::Term<'a>) -> Result<Self, ::rustler::Error> {
-                #atom_defs
+                use #atoms_module_name::*;
 
                 let value = ::rustler::types::atom::Atom::from_term(term)?;
 
@@ -110,17 +99,9 @@ pub fn gen_decoder(
     gen
 }
 
-pub fn gen_encoder(
-    enum_name: &Ident,
-    variants: &[&Variant],
-    atom_defs: &TokenStream,
-    has_lifetime: bool,
-) -> TokenStream {
-    let enum_type = if has_lifetime {
-        quote! { #enum_name <'b> }
-    } else {
-        quote! { #enum_name }
-    };
+fn gen_encoder(ctx: &Context, variants: &[&Variant], atoms_module_name: &Ident) -> TokenStream {
+    let enum_type = &ctx.ident_with_lifetime;
+    let enum_name = ctx.ident;
 
     let variant_defs: Vec<TokenStream> = variants
         .iter()
@@ -138,7 +119,7 @@ pub fn gen_encoder(
     let gen = quote! {
         impl<'b> ::rustler::Encoder for #enum_type {
             fn encode<'a>(&self, env: ::rustler::Env<'a>) -> ::rustler::Term<'a> {
-                #atom_defs
+                use #atoms_module_name::*;
 
                 match *self {
                     #(#variant_defs)*

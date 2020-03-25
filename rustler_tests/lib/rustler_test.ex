@@ -3,10 +3,12 @@ defmodule NifNotLoadedError do
 end
 
 defmodule RustlerTest do
-  use Rustler, otp_app: :rustler_test
+  use Rustler,
+    otp_app: :rustler_test,
+    crate: :rustler_test
 
   defp err do
-    throw NifNotLoadedError
+    throw(NifNotLoadedError)
   end
 
   def add_u32(_, _), do: err()
@@ -35,6 +37,7 @@ defmodule RustlerTest do
   def make_shorter_subbinary(_), do: err()
   def parse_integer(_), do: err()
   def binary_new(), do: err()
+  def owned_binary_new(), do: err()
   def unowned_to_owned(_), do: err()
   def realloc_shrink(), do: err()
   def realloc_grow(), do: err()
@@ -59,9 +62,23 @@ defmodule RustlerTest do
   def unit_enum_echo(_), do: err()
   def untagged_enum_echo(_), do: err()
   def untagged_enum_with_truthy(_), do: err()
+  def newtype_echo(_), do: err()
+  def tuplestruct_echo(_), do: err()
+  def newtype_record_echo(_), do: err()
+  def tuplestruct_record_echo(_), do: err()
+  def reserved_keywords_type_echo(_), do: err()
 
   def dirty_io(), do: err()
   def dirty_cpu(), do: err()
 
   def sum_range(_), do: err()
+
+  def bad_arg_error(), do: err()
+  def atom_str_error(), do: err()
+  def raise_atom_error(), do: err()
+  def raise_term_with_string_error(), do: err()
+  def raise_term_with_atom_error(), do: err()
+  def term_with_tuple_error(), do: err()
+
+  def nif_attrs_can_rename(), do: err()
 end

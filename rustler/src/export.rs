@@ -15,6 +15,7 @@
 /// The third argument is an `Option<fn(env: &Env, load_info: Term) -> bool>`. If this is
 /// `Some`, the function will execute when the NIF is first loaded by the BEAM.
 #[macro_export]
+#[deprecated(since = "0.22.0", note = "Please use `rustler::init!` instead.")]
 macro_rules! rustler_export_nifs {
     // Strip trailing comma.
     ($name:expr, [$( $exported_nif:tt ),+,], $on_load:expr) => {
@@ -77,9 +78,6 @@ macro_rules! rustler_export_nifs {
                             $crate::rustler_export_nifs!(
                                 internal_handle_nif_call, ($nif_fun, $nif_arity, env, argc, argv))
                         }
-                    //unsafe {
-                    //    $crate::codegen_runtime::handle_nif_call($nif_fun, $nif_arity, env, argc, argv)
-                    //}
                 }
                 nif_func
             },
@@ -88,6 +86,7 @@ macro_rules! rustler_export_nifs {
     };
 
     (internal_handle_nif_call, ($fun:path, $arity:expr, $env:expr, $argc:expr, $argv:expr)) => ({
+        use $crate::Term;
         let env_lifetime = ();
         let env = $crate::Env::new(&env_lifetime, $env);
 

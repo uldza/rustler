@@ -2,7 +2,7 @@
 name = "rustler_codegen"
 description = "Compiler plugin for Rustler"
 repository = "https://github.com/rusterlium/rustler/tree/master/rustler_codegen"
-version = "0.21.0" # rustler_codegen version
+version = "0.22.0-rc.0" # rustler_codegen version
 authors = ["Hansihe <hansihe@hansihe.com>"]
 license = "MIT/Apache-2.0"
 edition = "2018"
@@ -12,7 +12,7 @@ name = "rustler_codegen"
 proc_macro = true
 
 [dependencies]
-syn = { version = "0.15.24", features = ["derive"] }
-quote = "0.6.10"
+syn = { version = "1.0.5", features = ["full", "extra-traits"] }
+quote = "1.0"
 heck = "0.3"
-proc-macro2 = "0.4"
+proc-macro2 = "1.0"

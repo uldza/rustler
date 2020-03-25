@@ -10,10 +10,11 @@ extern crate syn;
 #[macro_use]
 extern crate quote;
 
-use syn::{Lit, Meta, MetaList, NestedMeta};
-
+mod context;
 mod ex_struct;
+mod init;
 mod map;
+mod nif;
 mod record;
 mod tuple;
 mod unit_enum;
@@ -27,113 +28,61 @@ enum RustlerAttr {
     Tag(String),
 }
 
-#[derive(Debug)]
-struct Context {
-    attrs: Vec<RustlerAttr>,
+/// Implementation of a Native Implementated Function (NIF) macro that lets the user annotate
+/// a function that will be wrapped in higer-level NIF implementation.
+///
+/// ```ignore
+/// #[rustler::nif]
+/// fn add(a: i64, b: i64) -> i64 {
+///     a + b
+/// }
+///
+/// #[rustler::nif]
+/// fn add(a: i64, b: i64) -> i64 {
+///     a - b
+/// }
+///
+/// #[rustler::nif]
+/// fn mul(a: i64, b: i64) -> i64 {
+///     a * b
+/// }
+///
+/// #[rustler::nif]
+/// fn div(a: i64, b: i64) -> i64 {
+///     a / b
+/// }
+///
+/// rustler::init!("Elixir.Math", [add, sub, mul, div], Some(load));
+/// ```
+#[proc_macro]
+pub fn init(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as init::InitMacroInput);
+    let output: proc_macro2::TokenStream = input.into();
+    output.into()
 }
 
-impl Context {
-    fn from_ast(ast: &syn::DeriveInput) -> Self {
-        let mut attrs: Vec<_> = ast
-            .attrs
-            .iter()
-            .filter_map(Context::get_rustler_attrs)
-            .flatten()
-            .collect();
+/// Implementation of a Native Implementated Function (NIF) macro that lets the user annotate
+/// a function that will be wrapped in higer-level NIF implementation.
+///
+/// ```ignore
+/// #[nif]
+/// fn add(a: i64, b: i64) -> i64 {
+///     a + b
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn nif(args: TokenStream, input: TokenStream) -> TokenStream {
+    let args = syn::parse_macro_input!(args as syn::AttributeArgs);
+    let input = syn::parse_macro_input!(input as syn::ItemFn);
 
-        //
-        // Default: generate encoder and decoder
-        //
-        if !Context::encode_decode_attr_set(&attrs) {
-            attrs.push(RustlerAttr::Encode);
-            attrs.push(RustlerAttr::Decode);
-        }
-
-        Self { attrs }
-    }
-
-    fn encode(&self) -> bool {
-        self.attrs.iter().any(|attr| match attr {
-            RustlerAttr::Encode => true,
-            _ => false,
-        })
-    }
-
-    fn decode(&self) -> bool {
-        self.attrs.iter().any(|attr| match attr {
-            RustlerAttr::Decode => true,
-            _ => false,
-        })
-    }
-
-    fn encode_decode_attr_set(attrs: &[RustlerAttr]) -> bool {
-        attrs.iter().any(|attr| match attr {
-            RustlerAttr::Encode => true,
-            RustlerAttr::Decode => true,
-            _ => false,
-        })
-    }
-
-    fn get_rustler_attrs(attr: &syn::Attribute) -> Option<Vec<RustlerAttr>> {
-        if attr.path.segments.len() == 1 && attr.path.segments[0].ident == "rustler" {
-            let meta = attr.parse_meta().expect("can parse meta");
-            match meta {
-                Meta::List(list) => Some(Context::parse_attribute_list(list)),
-                Meta::Word(word) => {
-                    panic!("Unexpected Ident {}", word);
-                }
-                Meta::NameValue(name_value) => {
-                    panic!("Unexpected name-value {}", name_value.ident);
-                }
-            }
-        } else {
-            None
-        }
-    }
-
-    fn parse_attribute_list(list: MetaList) -> Vec<RustlerAttr> {
-        list.nested
-            .iter()
-            .map(|nested| match nested {
-                NestedMeta::Meta(meta) => match meta.name().to_string().as_ref() {
-                    "encode" => RustlerAttr::Encode,
-                    "decode" => RustlerAttr::Decode,
-                    "module" => match meta {
-                        Meta::NameValue(name_value) => {
-                            let module = match name_value.lit {
-                                Lit::Str(ref module) => module.value(),
-                                _ => panic!("Cannot parse module"),
-                            };
-                            RustlerAttr::Module(module)
-                        }
-                        _ => panic!("Cannot parse module"),
-                    },
-                    "tag" => match meta {
-                        Meta::NameValue(name_value) => {
-                            let tag = match name_value.lit {
-                                Lit::Str(ref tag) => tag.value(),
-                                _ => panic!("Cannot parse tag"),
-                            };
-                            RustlerAttr::Tag(tag)
-                        }
-                        _ => panic!("Cannot parse tag"),
-                    },
-                    attribute => panic!("Unhandled attribute {}", attribute),
-                },
-                NestedMeta::Literal(lit) => match lit {
-                    Lit::Str(lit_str) => panic!("Unexpected literal {}", lit_str.value()),
-                    _ => panic!("Unexpected literal"),
-                },
-            })
-            .collect()
-    }
+    nif::transcoder_decorator(args, input).into()
 }
 
 /// Implementation of the `NifStruct` macro that lets the user annotate a struct that will
 /// be translated directly from an Elixir struct to a Rust struct. For example, the following
 /// struct, annotated as such:
 ///
-/// ```text
+/// ```ignore
 /// #[derive(Debug, NifStruct)]
 /// #[module = "AddStruct"]
 /// struct AddStruct {
@@ -144,9 +93,9 @@ impl Context {
 ///
 /// This would be translated by Rustler into:
 ///
-/// ```text
+/// ```elixir
 /// defmodule AddStruct do
-///     defstruct lhs: 0, rhs: 0
+///   defstruct lhs: 0, rhs: 0
 /// end
 /// ```
 #[proc_macro_derive(NifStruct, attributes(module, rustler))]
@@ -159,7 +108,7 @@ pub fn nif_struct(input: TokenStream) -> TokenStream {
 /// struct can be encoded or decoded from an Elixir map. For example, the following struct
 /// annotated as such:
 ///
-/// ```text
+/// ```ignore
 /// #[derive(NifMap)]
 /// struct AddMap {
 ///     lhs: i32,
@@ -170,7 +119,7 @@ pub fn nif_struct(input: TokenStream) -> TokenStream {
 /// Given the values 33 and 21 for this struct, this would result, when encoded, in an elixir
 /// map with two elements like:
 ///
-/// ```text
+/// ```elixir
 /// %{lhs: 33, rhs: 21}
 /// ```
 #[proc_macro_derive(NifMap, attributes(rustler))]
@@ -183,7 +132,7 @@ pub fn nif_map(input: TokenStream) -> TokenStream {
 /// struct can be encoded or decoded from an Elixir tuple. For example, the following struct
 /// annotated as such:
 ///
-/// ```text
+/// ```ignore
 /// #[derive(NifTuple)]
 /// struct AddTuple {
 ///     lhs: i32,
@@ -194,7 +143,7 @@ pub fn nif_map(input: TokenStream) -> TokenStream {
 /// Given the values 33 and 21 for this struct, this would result, when encoded, in an elixir
 /// tuple with two elements like:
 ///
-/// ```text
+/// ```elixir
 /// {33, 21}
 /// ```
 ///
@@ -209,7 +158,7 @@ pub fn nif_tuple(input: TokenStream) -> TokenStream {
 /// be translated directly from an Elixir struct to a Rust struct. For example, the following
 /// struct, annotated as such:
 ///
-/// ```text
+/// ```ignore
 /// #[derive(Debug, NifRecord)]
 /// #[tag = "record"]
 /// struct AddRecord {
@@ -220,10 +169,10 @@ pub fn nif_tuple(input: TokenStream) -> TokenStream {
 ///
 /// This would be translated by Rustler into:
 ///
-/// ```text
+/// ```elixir
 /// defmodule AddRecord do
-///     import Record
-///     defrecord :record, [lhs: 1, rhs: 2]
+///   import Record
+///   defrecord :record, [lhs: 1, rhs: 2]
 /// end
 /// ```
 #[proc_macro_derive(NifRecord, attributes(tag, rustler))]
@@ -235,7 +184,7 @@ pub fn nif_record(input: TokenStream) -> TokenStream {
 /// Implementation of the `NifUnitEnum` macro that lets the user annotate an enum with a unit type
 /// that will generate elixir atoms when encoded
 ///
-/// ```text
+/// ```ignore
 /// #[derive(NifUnitEnum)]
 /// enum UnitEnum {
 ///    FooBar,
@@ -245,11 +194,11 @@ pub fn nif_record(input: TokenStream) -> TokenStream {
 ///
 /// An example usage in elixir would look like the following.
 ///
-/// ```text
+/// ```elixir
 /// test "unit enum transcoder" do
-///    assert :foo_bar == RustlerTest.unit_enum_echo(:foo_bar)
-///    assert :baz == RustlerTest.unit_enum_echo(:baz)
-///    assert :invalid_variant == RustlerTest.unit_enum_echo(:somethingelse)
+///   assert :foo_bar == RustlerTest.unit_enum_echo(:foo_bar)
+///   assert :baz == RustlerTest.unit_enum_echo(:baz)
+///   assert :invalid_variant == RustlerTest.unit_enum_echo(:somethingelse)
 /// end
 /// ```
 ///
@@ -265,7 +214,7 @@ pub fn nif_unit_enum(input: TokenStream) -> TokenStream {
 /// generate elixir values when decoded. This can be used for rust enums that contain data and
 /// will generate a value based on the kind of data encoded. For example from the test code:
 ///
-/// ```text
+/// ```ignore
 /// #[derive(NifUntaggedEnum)]
 /// enum UntaggedEnum {
 ///     Foo(u32),
@@ -281,13 +230,13 @@ pub fn nif_unit_enum(input: TokenStream) -> TokenStream {
 ///
 /// This can be used from elixir in the following manner.
 ///
-/// ```text
-///   test "untagged enum transcoder" do
-///    assert 123 == RustlerTest.untagged_enum_echo(123)
-///    assert "Hello" == RustlerTest.untagged_enum_echo("Hello")
-///    assert %AddStruct{lhs: 45, rhs: 123} = RustlerTest.untagged_enum_echo(%AddStruct{lhs: 45, rhs: 123})
-///    assert :invalid_variant == RustlerTest.untagged_enum_echo([1,2,3,4])
-///  end
+/// ```elixir
+/// test "untagged enum transcoder" do
+///   assert 123 == RustlerTest.untagged_enum_echo(123)
+///   assert "Hello" == RustlerTest.untagged_enum_echo("Hello")
+///   assert %AddStruct{lhs: 45, rhs: 123} = RustlerTest.untagged_enum_echo(%AddStruct{lhs: 45, rhs: 123})
+///   assert :invalid_variant == RustlerTest.untagged_enum_echo([1,2,3,4])
+/// end
 /// ```
 ///
 /// Note that the type of elixir return is dependent on the data in the enum and the actual enum

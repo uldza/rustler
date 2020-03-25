@@ -2,7 +2,7 @@
 
 [Documentation](https://docs.rs/crate/rustler) | [Getting Started](https://github.com/rusterlium/rustler/blob/master/README.md#getting-started) | [Example](https://github.com/hansihe/NifIo)
 
-[![Build Status](https://travis-ci.org/rusterlium/rustler.svg?branch=master)](https://travis-ci.org/rusterlium/rustler)
+![Build Status](https://github.com/rusterlium/rustler/workflows/CI/badge.svg?branch=master)
 
 Rustler is a library for writing Erlang NIFs in safe Rust code. That means
 there should be no ways to crash the BEAM (Erlang VM). The library provides
@@ -35,28 +35,12 @@ NOTE: If you have previously used Rustler, you need to run `mix archive.uninstal
 This is the code for a minimal NIF that adds two numbers and returns the result.
 
 ```rust
-use rustler::{Encoder, Env, Error, Term};
-
-mod atoms {
-    rustler::rustler_atoms! {
-        atom ok;
-    }
+#[rustler::nif]
+fn add(a: i64, b: i64) -> i64 {
+    a + b
 }
 
-rustler::rustler_export_nifs!(
-    "Elixir.Math",
-    [
-        ("add", 2, add)
-    ],
-    None
-);
-
-fn add<'a>(env: Env<'a>, args: &[Term<'a>]) -> Result<Term<'a>, Error> {
-    let a: i64 = args[0].decode()?;
-    let b: i64 = args[1].decode()?;
-
-    Ok((atoms::ok(), a + b).encode(env))
-}
+rustler::init!("Elixir.Math", [add]);
 ```
 
 #### Supported nif_version

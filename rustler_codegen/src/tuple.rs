@@ -1,33 +1,25 @@
 use proc_macro2::TokenStream;
 
-use syn::{self, Data, Field, Ident};
+use syn::{self, Field, Index};
 
-use super::Context;
+use super::context::Context;
 
 pub fn transcoder_decorator(ast: &syn::DeriveInput) -> TokenStream {
     let ctx = Context::from_ast(ast);
 
-    let struct_fields = match ast.data {
-        Data::Struct(ref struct_data) => &struct_data.fields,
-        _ => panic!("Must decorate a struct"),
-    };
-
-    let num_lifetimes = ast.generics.lifetimes().count();
-    if num_lifetimes > 1 {
-        panic!("Struct can only have one lifetime argument");
-    }
-    let has_lifetime = num_lifetimes == 1;
-
-    let struct_fields: Vec<_> = struct_fields.iter().collect();
+    let struct_fields = ctx
+        .struct_fields
+        .as_ref()
+        .expect("NifTuple can only be used with structs");
 
     let decoder = if ctx.decode() {
-        gen_decoder(&ast.ident, &struct_fields, false, has_lifetime)
+        gen_decoder(&ctx, &struct_fields)
     } else {
         quote! {}
     };
 
     let encoder = if ctx.encode() {
-        gen_encoder(&ast.ident, &struct_fields, false, has_lifetime)
+        gen_encoder(&ctx, &struct_fields)
     } else {
         quote! {}
     };
@@ -40,56 +32,73 @@ pub fn transcoder_decorator(ast: &syn::DeriveInput) -> TokenStream {
     gen
 }
 
-pub fn gen_decoder(
-    struct_name: &Ident,
-    fields: &[&Field],
-    is_tuple: bool,
-    has_lifetime: bool,
-) -> TokenStream {
+fn gen_decoder(ctx: &Context, fields: &[&Field]) -> TokenStream {
+    let struct_type = &ctx.ident_with_lifetime;
+    let struct_name = ctx.ident;
+    let struct_name_str = struct_name.to_string();
+
     // Make a decoder for each of the fields in the struct.
-    let field_defs: Vec<TokenStream> = fields
+    let (assignments, field_defs): (Vec<TokenStream>, Vec<TokenStream>) = fields
         .iter()
         .enumerate()
         .map(|(index, field)| {
-            let error_message = format!("Could not decode index {} on tuple", index);
-            let decoder = quote! {
-                match ::rustler::Decoder::decode(terms[#index]) {
-                    Err(_) => return Err(::rustler::Error::RaiseTerm(Box::new(#error_message))),
-                    Ok(value) => value
+            let ident = field.ident.as_ref();
+            let pos_in_struct = if let Some(ident) = ident {
+                ident.to_string()
+            } else {
+                index.to_string()
+            };
+
+            let variable = Context::escape_ident(&pos_in_struct, "struct");
+
+            let assignment = quote! {
+                let #variable = try_decode_index(&terms, #pos_in_struct, #index)?;
+            };
+
+            let field_def = match ident {
+                None => quote! { #variable },
+                Some(ident) => {
+                    quote! { #ident: #variable }
                 }
             };
 
-            if is_tuple {
-                unimplemented!();
-            } else {
-                let ident = field.ident.as_ref().unwrap();
-                quote! { #ident: #decoder }
-            }
+            (assignment, field_def)
         })
-        .collect();
-
-    // If the struct has a lifetime argument, put that in the struct type.
-    let struct_typ = if has_lifetime {
-        quote! { #struct_name <'a> }
-    } else {
-        quote! { #struct_name }
-    };
+        .unzip();
 
     let field_num = field_defs.len();
 
     // The implementation itself
+    let construct = if ctx.is_tuple_struct {
+        quote! {
+            #(#assignments);*
+            Ok(#struct_name ( #(#field_defs),* ))
+        }
+    } else {
+        quote! {
+            #(#assignments);*
+            Ok(#struct_name { #(#field_defs),* })
+        }
+    };
     let gen = quote! {
-        impl<'a> ::rustler::Decoder<'a> for #struct_typ {
+        impl<'a> ::rustler::Decoder<'a> for #struct_type {
             fn decode(term: ::rustler::Term<'a>) -> Result<Self, ::rustler::Error> {
                 let terms = ::rustler::types::tuple::get_tuple(term)?;
                 if terms.len() != #field_num {
                     return Err(::rustler::Error::BadArg);
                 }
-                Ok(
-                    #struct_name {
-                        #(#field_defs),*
+
+                fn try_decode_index<'a, T>(terms: &[::rustler::Term<'a>], pos_in_struct: &str, index: usize) -> Result<T, rustler::Error>
+                    where
+                        T: rustler::Decoder<'a>,
+                {
+                    match ::rustler::Decoder::decode(terms[index]) {
+                        Err(_) => Err(::rustler::Error::RaiseTerm(Box::new(
+                                    format!("Could not decode field {} on {}", pos_in_struct, #struct_name_str)))),
+                        Ok(value) => Ok(value)
                     }
-                )
+                }
+                #construct
             }
         }
     };
@@ -97,22 +106,20 @@ pub fn gen_decoder(
     gen
 }
 
-pub fn gen_encoder(
-    struct_name: &Ident,
-    fields: &[&Field],
-    is_tuple: bool,
-    has_lifetime: bool,
-) -> TokenStream {
+fn gen_encoder(ctx: &Context, fields: &[&Field]) -> TokenStream {
+    let struct_type = &ctx.ident_with_lifetime;
+
     // Make a field encoder expression for each of the items in the struct.
     let field_encoders: Vec<TokenStream> = fields
         .iter()
-        .map(|field| {
-            let field_source = if is_tuple {
-                unimplemented!();
-            } else {
-                let field_ident = field.ident.as_ref().unwrap();
-                quote! { self.#field_ident }
+        .enumerate()
+        .map(|(index, field)| {
+            let literal_index = Index::from(index);
+            let field_source = match field.ident.as_ref() {
+                None => quote! { self.#literal_index },
+                Some(ident) => quote! { self.#ident },
             };
+
             quote! { #field_source.encode(env) }
         })
         .collect();
@@ -122,16 +129,9 @@ pub fn gen_encoder(
         [#(#field_encoders),*]
     };
 
-    // If the struct has a lifetime argument, put that in the struct type.
-    let struct_typ = if has_lifetime {
-        quote! { #struct_name <'b> }
-    } else {
-        quote! { #struct_name }
-    };
-
     // The implementation itself
     let gen = quote! {
-        impl<'b> ::rustler::Encoder for #struct_typ {
+        impl<'b> ::rustler::Encoder for #struct_type {
             fn encode<'a>(&self, env: ::rustler::Env<'a>) -> ::rustler::Term<'a> {
                 use ::rustler::Encoder;
                 let arr = #field_list_ast;
